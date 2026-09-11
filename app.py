@@ -1,4 +1,3 @@
-```python
 import os
 import re
 from io import BytesIO
@@ -603,4 +602,3 @@ if question:
             st.error(
                 f"Error: {error}"
             )
-```
