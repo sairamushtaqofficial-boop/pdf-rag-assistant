@@ -11,9 +11,9 @@ from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
+# =========================
+# SETTINGS
+# =========================
 
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 GROQ_MODEL = "openai/gpt-oss-20b"
@@ -23,9 +23,9 @@ CHUNK_OVERLAP = 200
 TOP_K = 5
 
 
-# ============================================================
-# STREAMLIT PAGE
-# ============================================================
+# =========================
+# PAGE CONFIG
+# =========================
 
 st.set_page_config(
     page_title="PDF RAG Assistant",
@@ -36,14 +36,13 @@ st.set_page_config(
 st.title("📚 PDF RAG Assistant")
 
 st.write(
-    "Upload a PDF and ask questions about its contents using "
-    "Retrieval-Augmented Generation (RAG)."
+    "Upload a PDF and ask questions about its contents."
 )
 
 
-# ============================================================
+# =========================
 # LOAD EMBEDDING MODEL
-# ============================================================
+# =========================
 
 @st.cache_resource
 def load_embedding_model():
@@ -53,42 +52,34 @@ def load_embedding_model():
     )
 
 
-# ============================================================
+# =========================
 # GET GROQ API KEY
-# ============================================================
+# =========================
 
-def get_groq_api_key():
+def get_api_key():
 
-    # Streamlit Cloud Secrets
+    # Streamlit Cloud
     try:
 
-        api_key = st.secrets["GROQ_API_KEY"]
-
-        if api_key:
-            return api_key
+        return st.secrets["GROQ_API_KEY"]
 
     except Exception:
+
         pass
 
 
-    # Local environment variable
-    api_key = os.getenv("GROQ_API_KEY")
-
-    if api_key:
-        return api_key
+    # Local computer
+    return os.getenv("GROQ_API_KEY")
 
 
-    return None
+# =========================
+# EXTRACT PDF TEXT
+# =========================
 
-
-# ============================================================
-# EXTRACT TEXT FROM PDF
-# ============================================================
-
-def extract_pdf_text(pdf_file):
+def extract_pdf(pdf_bytes):
 
     reader = PdfReader(
-        BytesIO(pdf_file)
+        BytesIO(pdf_bytes)
     )
 
     pages = []
@@ -102,7 +93,6 @@ def extract_pdf_text(pdf_file):
 
         if text:
 
-            # Remove unnecessary whitespace
             text = re.sub(
                 r"\s+",
                 " ",
@@ -121,9 +111,9 @@ def extract_pdf_text(pdf_file):
     return pages
 
 
-# ============================================================
+# =========================
 # CREATE CHUNKS
-# ============================================================
+# =========================
 
 def create_chunks(pages):
 
@@ -152,6 +142,7 @@ def create_chunks(pages):
                 )
 
             if end >= len(text):
+
                 break
 
             start = end - CHUNK_OVERLAP
@@ -159,11 +150,14 @@ def create_chunks(pages):
     return chunks
 
 
-# ============================================================
+# =========================
 # CREATE EMBEDDINGS
-# ============================================================
+# =========================
 
-def create_embeddings(chunks, model):
+def create_embeddings(
+    chunks,
+    model
+):
 
     texts = [
         chunk["text"]
@@ -181,11 +175,13 @@ def create_embeddings(chunks, model):
     )
 
 
-# ============================================================
-# CREATE FAISS VECTOR DATABASE
-# ============================================================
+# =========================
+# CREATE FAISS DATABASE
+# =========================
 
-def create_faiss_database(embeddings):
+def create_faiss_index(
+    embeddings
+):
 
     dimension = embeddings.shape[1]
 
@@ -200,11 +196,11 @@ def create_faiss_database(embeddings):
     return index
 
 
-# ============================================================
-# SEARCH FAISS
-# ============================================================
+# =========================
+# SEARCH DOCUMENT
+# =========================
 
-def search_documents(
+def search_document(
     question,
     index,
     chunks,
@@ -221,14 +217,14 @@ def search_documents(
         "float32"
     )
 
-    number_of_results = min(
+    k = min(
         TOP_K,
         len(chunks)
     )
 
     scores, indices = index.search(
         question_embedding,
-        number_of_results
+        k
     )
 
     results = []
@@ -239,6 +235,7 @@ def search_documents(
     ):
 
         if index_number == -1:
+
             continue
 
         results.append(
@@ -252,21 +249,21 @@ def search_documents(
     return results
 
 
-# ============================================================
-# GENERATE ANSWER USING GROQ
-# ============================================================
+# =========================
+# GENERATE ANSWER
+# =========================
 
 def generate_answer(
     question,
-    retrieved_documents
+    results
 ):
 
-    api_key = get_groq_api_key()
+    api_key = get_api_key()
 
     if not api_key:
 
         raise ValueError(
-            "GROQ_API_KEY is not configured. "
+            "GROQ_API_KEY is missing. "
             "Add it in Streamlit Secrets."
         )
 
@@ -276,38 +273,41 @@ def generate_answer(
     )
 
 
-    # Build context
+    # Build document context
+
     context = ""
 
-    for i, document in enumerate(
-        retrieved_documents,
+    for i, result in enumerate(
+        results,
         start=1
     ):
 
         context += (
             f"\n\n"
-            f"[Source {i} - PDF Page "
-            f"{document['page']}]\n"
-            f"{document['text']}"
+            f"[Source {i} - Page "
+            f"{result['page']}]\n"
+            f"{result['text']}"
         )
 
+
+    # System instructions
 
     system_prompt = """
 You are a PDF question-answering assistant.
 
-Answer the user's question using ONLY the information
-provided in the document context.
+Answer the user's question ONLY using the
+information contained in the supplied document context.
 
 Do not invent information.
 
-If the answer cannot be found in the provided context,
+If the answer is not present in the context,
 say:
 
 "I could not find this information in the uploaded document."
 
-When possible, mention the relevant PDF page number.
+When possible, mention the PDF page number.
 
-Keep the answer clear and concise.
+Keep answers clear and concise.
 """
 
 
@@ -317,7 +317,7 @@ DOCUMENT CONTEXT:
 {context}
 
 
-USER QUESTION:
+QUESTION:
 
 {question}
 """
@@ -347,31 +347,32 @@ USER QUESTION:
     return response.choices[0].message.content
 
 
-# ============================================================
+# =========================
 # PDF UPLOAD
-# ============================================================
+# =========================
 
 uploaded_file = st.file_uploader(
-    "📄 Upload a PDF",
+    "📄 Upload your PDF",
     type=["pdf"]
 )
 
 
-# ============================================================
+# =========================
 # PROCESS PDF
-# ============================================================
+# =========================
 
 if uploaded_file:
 
-    file_bytes = uploaded_file.getvalue()
+    pdf_bytes = uploaded_file.getvalue()
 
     file_id = (
         uploaded_file.name,
-        len(file_bytes)
+        len(pdf_bytes)
     )
 
 
-    # Process only when a new PDF is uploaded
+    # Only process a new PDF
+
     if st.session_state.get(
         "file_id"
     ) != file_id:
@@ -380,12 +381,10 @@ if uploaded_file:
             "Processing PDF..."
         ):
 
-            # -------------------------
             # Extract text
-            # -------------------------
 
-            pages = extract_pdf_text(
-                file_bytes
+            pages = extract_pdf(
+                pdf_bytes
             )
 
 
@@ -399,25 +398,19 @@ if uploaded_file:
                 st.stop()
 
 
-            # -------------------------
             # Create chunks
-            # -------------------------
 
             chunks = create_chunks(
                 pages
             )
 
 
-            # -------------------------
             # Load embedding model
-            # -------------------------
 
             model = load_embedding_model()
 
 
-            # -------------------------
             # Create embeddings
-            # -------------------------
 
             embeddings = create_embeddings(
                 chunks,
@@ -425,18 +418,14 @@ if uploaded_file:
             )
 
 
-            # -------------------------
-            # Create FAISS database
-            # -------------------------
+            # Create FAISS index
 
-            index = create_faiss_database(
+            index = create_faiss_index(
                 embeddings
             )
 
 
-            # -------------------------
-            # Store in session
-            # -------------------------
+            # Save everything in session
 
             st.session_state.file_id = file_id
 
@@ -451,13 +440,14 @@ if uploaded_file:
 
         st.success(
             f"PDF processed successfully! "
-            f"Created {len(chunks)} searchable chunks."
+            f"{len(pages)} pages and "
+            f"{len(chunks)} chunks created."
         )
 
 
-# ============================================================
-# SHOW DOCUMENT INFORMATION
-# ============================================================
+# =========================
+# DOCUMENT INFORMATION
+# =========================
 
 if "chunks" in st.session_state:
 
@@ -478,9 +468,9 @@ if "chunks" in st.session_state:
         )
 
 
-# ============================================================
+# =========================
 # CHAT HISTORY
-# ============================================================
+# =========================
 
 if "chat_history" not in st.session_state:
 
@@ -498,16 +488,18 @@ for message in st.session_state.chat_history:
         )
 
 
-# ============================================================
-# ASK QUESTION
-# ============================================================
+# =========================
+# USER QUESTION
+# =========================
 
 question = st.chat_input(
-    "Ask a question about your PDF..."
+    "Ask a question about the PDF..."
 )
 
 
 if question:
+
+    # Make sure PDF exists
 
     if "index" not in st.session_state:
 
@@ -518,9 +510,14 @@ if question:
         st.stop()
 
 
-    # -------------------------
-    # Show user question
-    # -------------------------
+    # Display question
+
+    with st.chat_message("user"):
+
+        st.markdown(
+            question
+        )
+
 
     st.session_state.chat_history.append(
         {
@@ -530,82 +527,80 @@ if question:
     )
 
 
-    with st.chat_message("user"):
-
-        st.markdown(question)
-
-
-    # -------------------------
     # Generate answer
-    # -------------------------
 
-    with st.chat_message(
-        "assistant"
-    ):
+    with st.chat_message("assistant"):
 
-        with st.spinner(
-            "Searching the document..."
-        ):
+        try:
 
             model = load_embedding_model()
 
 
-            # Retrieve relevant chunks
-            retrieved_documents = search_documents(
-                question,
-                st.session_state.index,
-                st.session_state.chunks,
-                model
-            )
+            # Search FAISS
 
-
-        # Show retrieved sources
-        with st.expander(
-            "🔎 Retrieved document chunks"
-        ):
-
-            for i, document in enumerate(
-                retrieved_documents,
-                start=1
+            with st.spinner(
+                "Searching the document..."
             ):
 
-                st.markdown(
-                    f"**Source {i} — Page "
-                    f"{document['page']} — "
-                    f"Similarity: "
-                    f"{document['score']:.3f}**"
-                )
-
-                st.write(
-                    document["text"]
+                results = search_document(
+                    question,
+                    st.session_state.index,
+                    st.session_state.chunks,
+                    model
                 )
 
 
-        with st.spinner(
-            "Generating answer..."
-        ):
+            # Show retrieved chunks
 
-            try:
+            with st.expander(
+                "🔎 Retrieved sources"
+            ):
+
+                for i, result in enumerate(
+                    results,
+                    start=1
+                ):
+
+                    st.markdown(
+                        f"**Source {i} — "
+                        f"Page {result['page']} — "
+                        f"Similarity "
+                        f"{result['score']:.3f}**"
+                    )
+
+                    st.write(
+                        result["text"]
+                    )
+
+
+            # Ask Groq
+
+            with st.spinner(
+                "Generating answer..."
+            ):
 
                 answer = generate_answer(
                     question,
-                    retrieved_documents
-                )
-
-                st.markdown(answer)
-
-
-                st.session_state.chat_history.append(
-                    {
-                        "role": "assistant",
-                        "content": answer
-                    }
+                    results
                 )
 
 
-            except Exception as error:
+            st.markdown(
+                answer
+            )
 
-                st.error(
-                    f"Error: {error}"
-                )
+
+            st.session_state.chat_history.append(
+                {
+                    "role": "assistant",
+                    "content": answer
+                }
+            )
+
+
+        except Exception as error:
+
+            st.error(
+                f"Error: {error}"
+            )
 ```
